@@ -25,24 +25,35 @@ class Generator:
     def forward(self, input_ids, attention_mask):
         return self.model(input_ids, attention_mask)
 
+    def _do_relprop(self, output, index):
+        if index == None:
+            index = np.argmax(output.cpu().data.numpy(), axis=-1)
+
+        one_hot_vector = (torch.nn.functional
+                .one_hot(
+                        # one_hot requires ints
+                        torch.tensor(index, dtype=torch.int64),
+                        num_classes=output.size(-1)
+                    )
+                # but requires_grad_ needs floats
+                .to(torch.float)
+            ).to(output.device)
+
+        hot_output = torch.sum(one_hot_vector.clone().requires_grad_(True) * output)
+        self.model.zero_grad()
+        hot_output.backward(retain_graph=True)
+
+        print(one_hot_vector)
+        return self.model.relprop(one_hot_vector, alpha=1)
+
     def generate_LRP(self, input_ids, attention_mask,
                      index=None, start_layer=11):
         output = self.model(input_ids=input_ids, attention_mask=attention_mask)[0]
-        kwargs = {"alpha": 1}
 
         if index == None:
             index = np.argmax(output.cpu().data.numpy(), axis=-1)
 
-        one_hot = np.zeros((1, output.size()[-1]), dtype=np.float32)
-        one_hot[0, index] = 1
-        one_hot_vector = one_hot
-        one_hot = torch.from_numpy(one_hot).requires_grad_(True)
-        one_hot = torch.sum(one_hot.to(output.device) * output)
-
-        self.model.zero_grad()
-        one_hot.backward(retain_graph=True)
-
-        self.model.relprop(torch.tensor(one_hot_vector).to(input_ids.device), **kwargs)
+        self._do_relprop(output, index)
 
         cams = []
         blocks = self.model.bert.encoder.layer
@@ -62,20 +73,10 @@ class Generator:
     def generate_LRP_last_layer(self, input_ids, attention_mask,
                      index=None):
         output = self.model(input_ids=input_ids, attention_mask=attention_mask)[0]
-        kwargs = {"alpha": 1}
         if index == None:
             index = np.argmax(output.cpu().data.numpy(), axis=-1)
 
-        one_hot = np.zeros((1, output.size()[-1]), dtype=np.float32)
-        one_hot[0, index] = 1
-        one_hot_vector = one_hot
-        one_hot = torch.from_numpy(one_hot).requires_grad_(True)
-        one_hot = torch.sum(one_hot.to(output.device) * output)
-
-        self.model.zero_grad()
-        one_hot.backward(retain_graph=True)
-
-        self.model.relprop(torch.tensor(one_hot_vector).to(input_ids.device), **kwargs)
+        self._do_relprop(output, index)
 
         cam = self.model.bert.encoder.layer[-1].attention.self.get_attn_cam()[0]
         cam = cam.clamp(min=0).mean(dim=0).unsqueeze(0)
@@ -85,21 +86,11 @@ class Generator:
     def generate_full_lrp(self, input_ids, attention_mask,
                      index=None):
         output = self.model(input_ids=input_ids, attention_mask=attention_mask)[0]
-        kwargs = {"alpha": 1}
 
         if index == None:
             index = np.argmax(output.cpu().data.numpy(), axis=-1)
 
-        one_hot = np.zeros((1, output.size()[-1]), dtype=np.float32)
-        one_hot[0, index] = 1
-        one_hot_vector = one_hot
-        one_hot = torch.from_numpy(one_hot).requires_grad_(True)
-        one_hot = torch.sum(one_hot.to(output.device) * output)
-
-        self.model.zero_grad()
-        one_hot.backward(retain_graph=True)
-
-        cam = self.model.relprop(torch.tensor(one_hot_vector).to(input_ids.device), **kwargs)
+        cam = self._do_relprop(output, index)
         cam = cam.sum(dim=2)
         cam[:, 0] = 0
         return cam
@@ -127,21 +118,11 @@ class Generator:
 
     def generate_attn_gradcam(self, input_ids, attention_mask, index=None):
         output = self.model(input_ids=input_ids, attention_mask=attention_mask)[0]
-        kwargs = {"alpha": 1}
 
         if index == None:
             index = np.argmax(output.cpu().data.numpy(), axis=-1)
 
-        one_hot = np.zeros((1, output.size()[-1]), dtype=np.float32)
-        one_hot[0, index] = 1
-        one_hot_vector = one_hot
-        one_hot = torch.from_numpy(one_hot).requires_grad_(True)
-        one_hot = torch.sum(one_hot.to(output.device) * output)
-
-        self.model.zero_grad()
-        one_hot.backward(retain_graph=True)
-
-        self.model.relprop(torch.tensor(one_hot_vector).to(input_ids.device), **kwargs)
+        self._do_relprop(output, index)
 
         cam = self.model.bert.encoder.layer[-1].attention.self.get_attn()
         grad = self.model.bert.encoder.layer[-1].attention.self.get_attn_gradients()
